@@ -11,7 +11,21 @@ import embedding
 # server is mounted behind a reverse proxy that rewrites the Host header, so
 # host="0.0.0.0" is required to avoid that restriction rejecting every
 # proxied request with a 421.
-mcp = FastMCP("imdb-watchlist", host="0.0.0.0")
+INSTRUCTIONS = (
+    "IMDb Watchlist Sync MCP Server.\n\n"
+    "Provides access to cached IMDb watchlists scraped from public IMDb profiles.\n\n"
+    "Recommended Tool Usage Order:\n"
+    "1. `get_stats`: Call first to discover cached user IDs, item counts (movies/TV), and cache freshness.\n"
+    "2. `list_watchlist`: Retrieve paginated titles for a specific user (supports filtering by 'all', 'movie', or 'tv'). "
+    "If multiple users are cached, user_id is required.\n"
+    "3. `search_watchlist`: Search titles across all cached user watchlists.\n\n"
+    "Important Caveats:\n"
+    "- Querying an uncached user via `list_watchlist` triggers a live, blocking scrape using a headless browser, which may take several seconds.\n"
+    "- Cached watchlists older than 1 hour (3600 seconds) return existing data immediately and refresh asynchronously in the background.\n"
+    "- `search_watchlist` uses lexical matching by default; semantic search is automatically blended in if an embedding backend is configured."
+)
+
+mcp = FastMCP("imdb-watchlist", instructions=INSTRUCTIONS, host="0.0.0.0")
 
 logger = logging.getLogger("imdb-server.mcp")
 

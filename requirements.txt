@@ -4,5 +4,5 @@ uvicorn
 requests
 beautifulsoup4
 seleniumbase
-mcp
+mcp<2
 python-dotenv
