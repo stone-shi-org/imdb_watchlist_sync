@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest
+import requests
 
 import arr_sync
 
@@ -229,6 +230,93 @@ def test_radarr_add_movie_builds_payload_from_lookup_result():
     assert sent_payload["minimumAvailability"] == "announced"
     assert sent_payload["monitored"] is True
     assert sent_payload["addOptions"] == {"searchForMovie": True}
+
+
+def test_radarr_client_retries_on_connection_error_and_succeeds(monkeypatch):
+    client = arr_sync.RadarrClient("https://radarr.example.com", "key")
+    sleep_calls = []
+    monkeypatch.setattr(arr_sync.time, "sleep", lambda s: sleep_calls.append(s))
+
+    success_resp = _fake_response([{"id": 1, "imdbId": "tt123"}])
+    mock_get = MagicMock(side_effect=[
+        requests.ConnectionError("Connection refused"),
+        requests.ConnectionError("Connection refused"),
+        success_resp,
+    ])
+
+    with patch("arr_sync.requests.get", mock_get):
+        result = client.get_library_by_imdb()
+
+    assert result == {"tt123": {"id": 1, "imdbId": "tt123"}}
+    assert mock_get.call_count == 3
+    assert sleep_calls == [1.0, 2.0]
+
+
+def test_radarr_client_retries_exhausted_raises_connection_error(monkeypatch):
+    client = arr_sync.RadarrClient("https://radarr.example.com", "key")
+    sleep_calls = []
+    monkeypatch.setattr(arr_sync.time, "sleep", lambda s: sleep_calls.append(s))
+
+    mock_get = MagicMock(side_effect=requests.ConnectionError("Connection refused"))
+
+    with patch("arr_sync.requests.get", mock_get):
+        with pytest.raises(requests.ConnectionError):
+            client.get_library_by_imdb()
+
+    assert mock_get.call_count == arr_sync.MAX_RETRIES + 1
+    assert len(sleep_calls) == arr_sync.MAX_RETRIES
+
+
+def test_radarr_client_retries_transient_status_codes(monkeypatch):
+    client = arr_sync.RadarrClient("https://radarr.example.com", "key")
+    sleep_calls = []
+    monkeypatch.setattr(arr_sync.time, "sleep", lambda s: sleep_calls.append(s))
+
+    err_503 = _fake_response({"error": "unavailable"}, status=503, raise_exc=requests.HTTPError("503"))
+    success_resp = _fake_response([{"id": 1, "imdbId": "tt456"}])
+    mock_get = MagicMock(side_effect=[err_503, success_resp])
+
+    with patch("arr_sync.requests.get", mock_get):
+        result = client.get_library_by_imdb()
+
+    assert result == {"tt456": {"id": 1, "imdbId": "tt456"}}
+    assert mock_get.call_count == 2
+    assert sleep_calls == [1.0]
+
+
+def test_radarr_client_does_not_retry_non_transient_http_error(monkeypatch):
+    client = arr_sync.RadarrClient("https://radarr.example.com", "key")
+    sleep_calls = []
+    monkeypatch.setattr(arr_sync.time, "sleep", lambda s: sleep_calls.append(s))
+
+    err_401 = _fake_response({"error": "unauthorized"}, status=401, raise_exc=requests.HTTPError("401"))
+    mock_get = MagicMock(return_value=err_401)
+
+    with patch("arr_sync.requests.get", mock_get):
+        with pytest.raises(requests.HTTPError):
+            client.get_library_by_imdb()
+
+    assert mock_get.call_count == 1
+    assert len(sleep_calls) == 0
+
+
+def test_sonarr_client_retries_on_connection_error(monkeypatch):
+    client = arr_sync.SonarrClient("https://sonarr.example.com", "key")
+    sleep_calls = []
+    monkeypatch.setattr(arr_sync.time, "sleep", lambda s: sleep_calls.append(s))
+
+    success_resp = _fake_response([{"id": 10, "imdbId": "tt999"}])
+    mock_get = MagicMock(side_effect=[
+        requests.ConnectionError("Connection refused"),
+        success_resp,
+    ])
+
+    with patch("arr_sync.requests.get", mock_get):
+        result = client.get_library_by_imdb()
+
+    assert result == {"tt999": {"id": 10, "imdbId": "tt999"}}
+    assert mock_get.call_count == 2
+    assert sleep_calls == [1.0]
 
 
 def test_sonarr_get_library_by_imdb():

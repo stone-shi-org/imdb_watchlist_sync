@@ -99,25 +99,70 @@ def load_arr_config() -> dict:
     return config
 
 
+MAX_RETRIES = 3
+INITIAL_RETRY_DELAY = 1.0
+BACKOFF_FACTOR = 2.0
+TRANSIENT_STATUS_CODES = {502, 503, 504}
+
+
+def _request_with_retry(
+    method: str,
+    url: str,
+    headers: dict,
+    json_data: Optional[dict] = None,
+    timeout: int = 30,
+    max_retries: int = MAX_RETRIES,
+    initial_delay: float = INITIAL_RETRY_DELAY,
+    backoff_factor: float = BACKOFF_FACTOR,
+):
+    delay = initial_delay
+    for attempt in range(max_retries + 1):
+        try:
+            if method == "get":
+                resp = requests.get(url, headers=headers, timeout=timeout)
+            elif method == "post":
+                resp = requests.post(url, headers=headers, json=json_data, timeout=timeout)
+            elif method == "put":
+                resp = requests.put(url, headers=headers, json=json_data, timeout=timeout)
+            else:
+                resp = requests.request(method, url, headers=headers, json=json_data, timeout=timeout)
+
+            if resp.status_code in TRANSIENT_STATUS_CODES and attempt < max_retries:
+                logger.warning(
+                    "Received status %d from %s, retrying in %.1fs (attempt %d/%d)",
+                    resp.status_code, url, delay, attempt + 1, max_retries,
+                )
+                time.sleep(delay)
+                delay *= backoff_factor
+                continue
+
+            resp.raise_for_status()
+            return resp.json()
+        except requests.ConnectionError as e:
+            if attempt < max_retries:
+                logger.warning(
+                    "Connection error requesting %s: %s. Retrying in %.1fs (attempt %d/%d)",
+                    url, e, delay, attempt + 1, max_retries,
+                )
+                time.sleep(delay)
+                delay *= backoff_factor
+                continue
+            raise
+
+
 class RadarrClient:
     def __init__(self, url: str, api_key: str):
         self.base_url = url.rstrip("/")
         self.headers = {"X-Api-Key": api_key}
 
     def _get(self, path: str):
-        resp = requests.get(f"{self.base_url}/api/v3{path}", headers=self.headers, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        return _request_with_retry("get", f"{self.base_url}/api/v3{path}", headers=self.headers, timeout=30)
 
     def _post(self, path: str, payload: dict):
-        resp = requests.post(f"{self.base_url}/api/v3{path}", headers=self.headers, json=payload, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        return _request_with_retry("post", f"{self.base_url}/api/v3{path}", headers=self.headers, json_data=payload, timeout=30)
 
     def _put(self, path: str, payload: dict):
-        resp = requests.put(f"{self.base_url}/api/v3{path}", headers=self.headers, json=payload, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        return _request_with_retry("put", f"{self.base_url}/api/v3{path}", headers=self.headers, json_data=payload, timeout=30)
 
     def get_library_by_imdb(self) -> dict:
         return {m["imdbId"]: m for m in self._get("/movie") if m.get("imdbId")}
@@ -174,19 +219,13 @@ class SonarrClient:
         self.headers = {"X-Api-Key": api_key}
 
     def _get(self, path: str):
-        resp = requests.get(f"{self.base_url}/api/v3{path}", headers=self.headers, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        return _request_with_retry("get", f"{self.base_url}/api/v3{path}", headers=self.headers, timeout=30)
 
     def _post(self, path: str, payload: dict):
-        resp = requests.post(f"{self.base_url}/api/v3{path}", headers=self.headers, json=payload, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        return _request_with_retry("post", f"{self.base_url}/api/v3{path}", headers=self.headers, json_data=payload, timeout=30)
 
     def _put(self, path: str, payload: dict):
-        resp = requests.put(f"{self.base_url}/api/v3{path}", headers=self.headers, json=payload, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        return _request_with_retry("put", f"{self.base_url}/api/v3{path}", headers=self.headers, json_data=payload, timeout=30)
 
     def get_library_by_imdb(self) -> dict:
         return {s["imdbId"]: s for s in self._get("/series") if s.get("imdbId")}
